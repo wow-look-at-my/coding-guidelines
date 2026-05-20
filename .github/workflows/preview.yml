@@ -2,14 +2,13 @@ name: Deploy PR previews
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, closed]
+    types: [opened, reopened, synchronize]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    if: github.event.action != 'closed'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: bash build.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -18,7 +17,6 @@ jobs:
 
   deploy-preview:
     needs: build
-    if: always()
     uses: PazerOP/pr-preview-action/.github/workflows/preview.yml@master
     with:
       artifact-name: build
