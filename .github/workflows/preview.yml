@@ -1,6 +1,8 @@
-name: Deploy PR previews
+name: Deploy to GitHub Pages
 
 on:
+  push:
+    branches: [master]
   pull_request:
     types: [opened, reopened, synchronize]
 
