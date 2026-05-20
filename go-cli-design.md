@@ -104,6 +104,10 @@ func init() {
 
 ## Flags
 
+Long flags use double-hyphen (`--verbose`, `--output`). Short aliases use
+single-hyphen (`-v`, `-o`). Cobra and pflag enforce this automatically. Never use
+the `flag` stdlib package -- it only supports single-hyphen for all flags.
+
 Bind flags to package-level variables in `init()`, not struct fields:
 
 ```go
