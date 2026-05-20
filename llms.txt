@@ -1,0 +1,26 @@
+# Coding Guidelines
+
+> Code style and conventions for the wow-look-at-my org. Covers Go, TypeScript, file organization, CI/CD, and git workflow.
+
+## Go
+
+- [Go Style](go-style.md): naming, formatting, imports, comments
+- [Go Project Structure](go-project-structure.md): how to organize a Go repo
+- [Go Error Handling](go-error-handling.md): wrapping, sentinels, early returns
+- [Go Testing](go-testing.md): testify, table-driven tests, mocks, httptest
+- [Go CLI Design](go-cli-design.md): cobra patterns, command registration, flags
+- [Go Interfaces and Constructors](go-interfaces.md): small interfaces, Config structs, functional options
+
+## TypeScript
+
+- [TypeScript Style](typescript-style.md): project layout, build tooling, module conventions
+
+## General
+
+- [File Organization](file-organization.md): one language per file, file size limits
+- [CI/CD](ci-cd.md): GitHub Actions, go-toolchain, workflow triggers
+- [Git Workflow](git-workflow.md): branching, commits, squash merge
+
+## Full content
+
+- [llms-full.txt](llms-full.txt): All coding guidelines in a single file

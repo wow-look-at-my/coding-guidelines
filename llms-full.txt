@@ -1,0 +1,1296 @@
+# Coding Guidelines
+
+> Code style and conventions for the wow-look-at-my org.
+
+# Go Style
+
+## Naming
+
+### Types
+
+PascalCase for exported, camelCase for unexported. No stutter relative to the package name.
+
+```go
+type Updater struct { ... }          // exported
+type VersionFilter struct { ... }    // exported
+type commandConfig struct { ... }    // unexported
+type proxyConfig struct { ... }      // unexported
+```
+
+### Functions
+
+Verb or verb-noun. Predicates use `is`/`has`/`can` prefix and return `bool`.
+
+```go
+func detectLatest(slug string) (*Release, error)
+func installRelease(rel *Release, dest string) error
+func normalizeSlug(slug string) string
+
+func isGHA() bool
+func hasFilters() bool
+func canUseTokenForDomain(token, domain string) (bool, error)
+```
+
+### Variables
+
+camelCase for package-level unexported, PascalCase for exported. Short names for
+short-lived locals (`r`, `w`, `f`, `d`, `cfg`), descriptive for longer-lived ones.
+
+```go
+var defaultUpdater *Updater           // unexported singleton
+var EmbeddedVersion string            // exported, settable via ldflags
+var ghTokenPrefixes = []string{...}   // unexported, plural noun for slices
+```
+
+### Constants
+
+Grouped in `const (...)` blocks. camelCase for unexported, PascalCase for exported.
+Clear prefix when constants form a set.
+
+```go
+const (
+    fileLengthWarn  = 500
+    fileLengthError = 750
+)
+```
+
+### Files
+
+Lowercase. Underscores only for platform-specific build tags (`_linux.go`, `_darwin.go`,
+`_windows.go`). Multi-word concept files use underscores (`github_source.go`,
+`repository_slug.go`). Test files mirror their source (`detect.go` / `detect_test.go`).
+
+## Imports
+
+Three groups separated by blank lines: stdlib, external, internal. Alphabetical within
+each group. Import aliases only to disambiguate collisions.
+
+```go
+import (
+    "context"
+    "fmt"
+    "os"
+
+    "github.com/spf13/cobra"
+    selfupdate "github.com/wow-look-at-my/go-selfupdate-mini"
+
+    "github.com/wow-look-at-my/wow-cli/store"
+)
+```
+
+## Comments
+
+Doc comments on all exported identifiers. Start with the identifier name.
+
+```go
+// Updater is responsible for managing the context of self-update.
+type Updater struct { ... }
+
+// NewUpdater creates a new updater instance.
+// If you don't specify a source in the config object, GitHub will be used.
+func NewUpdater(config Config) (*Updater, error) { ... }
+```
+
+Unexported identifiers get a doc comment when the purpose is not obvious from the name.
+Trivial helpers can go without.
+
+```go
+// proxyConfig is the JSON structure inside GO_PROXY_CONFIG (base64-encoded).
+type proxyConfig struct { ... }
+```
+
+Inline comments explain the "why", never the "what":
+
+```go
+// Use GONOSUMDB instead of GOSUMDB=off so toolchain auto-downloads still work.
+os.Setenv("GONOSUMDB", "*")
+
+// Check extensions longest-first to match .tar.gz before .gz
+for _, ext := range sortedExtensions(decompressors) {
+```
+
+Use double-dash (`--`) for em-dashes in comments, never Unicode characters.
+No non-ASCII in source files.
+
+Use Go doc links (`[Symbol]`) to cross-reference within package documentation:
+
+```go
+// When this option is omitted, the version is auto-detected via [CurrentVersion].
+```
+
+## Formatting
+
+No named return values. All returns are explicit.
+
+`defer f.Close()` immediately after opening a file or response body, before any reads:
+
+```go
+f, err := os.Open(path)
+if err != nil {
+    return err
+}
+defer f.Close()
+```
+
+Use `errors.Is(err, target)` for sentinel comparison, never `err == target`.
+
+Atomic file writes for anything that might be read concurrently -- write to a temp
+file then rename:
+
+```go
+tmp, err := os.CreateTemp(dir, ".config-tmp-*")
+// ... write, chmod, close ...
+os.Rename(tmp.Name(), targetPath)
+```
+
+`sync.Once` for lazy memoization of expensive operations:
+
+```go
+var (
+    detectOnce sync.Once
+    detected   string
+)
+
+func CurrentVersion() string {
+    detectOnce.Do(detect)
+    return detected
+}
+```
+
+
+---
+
+# Go Project Structure
+
+## Binaries (CLI tools, servers)
+
+Top-level `main.go` does nothing but call into a `cmd` package:
+
+```go
+// main.go
+package main
+
+import "github.com/wow-look-at-my/myapp/cmd"
+
+func main() {
+    cmd.Execute()
+}
+```
+
+Organize by responsibility:
+
+```
+main.go
+cmd/
+    root.go         # rootCmd definition + Execute()
+    install.go      # one file per subcommand
+    upgrade.go
+    version.go
+store/              # data persistence
+manifest/           # domain logic
+.github/
+    workflows/
+        ci.yml
+go.mod
+go.sum
+```
+
+Each subcommand file registers itself via `init()`. The main file never manually
+registers commands.
+
+## Libraries
+
+Flat single-package layout at the repo root. One concept per file.
+
+```
+updater.go
+detect.go
+update.go
+install.go
+decompress.go
+source.go
+github_source.go
+errors.go
+config.go
+log.go
+```
+
+No subdirectories unless the library genuinely has independent subsystems. Splitting a
+flat package into sub-packages "for organization" adds import friction with no benefit.
+
+## Multi-package repos
+
+When a binary has internal subsystems complex enough to warrant separate packages, use
+purpose-named directories:
+
+```
+src/
+    main.go
+    goenv.go
+    cmd/
+        release.go
+        matrix.go
+    build/
+        build.go
+        docker.go
+    codeql/
+        codeql.go
+```
+
+Each sub-package owns one concern. Cross-package dependencies flow downward
+(cmd -> build, cmd -> codeql), never sideways between peer packages.
+
+## File size
+
+Soft limit: 500 lines per `.go` file. Hard limit: 750 lines. If a file exceeds this,
+split by concern.
+
+## What goes where
+
+| Content | Location |
+|---------|----------|
+| Sentinel errors | `errors.go` |
+| Config struct + related types | `config.go` |
+| Interface definitions | Same file as the consumer, or a dedicated `source.go` / `types.go` |
+| Interface implementations | Separate file per implementation (`github_source.go`, `npm_source.go`) |
+| Test mocks | In the `_test.go` file that uses them |
+| Compile-time interface checks | End of the implementation file |
+| Package-level doc comment | On the `package` declaration in the primary file |
+
+
+---
+
+# Go Error Handling
+
+## Wrap with context
+
+Always wrap errors with `fmt.Errorf` and `%w` so callers can inspect the chain with
+`errors.Is` / `errors.As`:
+
+```go
+return fmt.Errorf("failed to create tag %s: %w", tag, err)
+return fmt.Errorf("build failed: %w", err)
+return fmt.Errorf("create install directory: %w", err)
+```
+
+For errors that have both a root cause and a secondary failure (e.g. rollback), use
+`%w` for the primary and `%v` for the secondary:
+
+```go
+return fmt.Errorf("install failed (%w) and rollback also failed (%v)", err, rerr)
+```
+
+## Sentinel errors
+
+Define sentinel errors in a dedicated `errors.go` file using `errors.New`:
+
+```go
+var (
+    ErrInvalidSlug                 = errors.New("invalid slug format, expected 'owner/name'")
+    ErrAssetNotFound               = errors.New("asset not found")
+    ErrCannotDecompressFile        = errors.New("failed to decompress")
+    ErrExecutableNotFoundInArchive = errors.New("executable not found")
+)
+```
+
+Compose sentinels into wrapped errors for specific context:
+
+```go
+return nil, fmt.Errorf("%w zip file: %v", ErrCannotDecompressFile, err)
+return nil, fmt.Errorf("%w in tar: %q", ErrExecutableNotFoundInArchive, cmd)
+```
+
+## Early returns
+
+Return early on error instead of nesting. Each error check is a guard clause:
+
+```go
+func (r RepositorySlug) GetSlug() (string, string, error) {
+    if r.owner == "" && r.repo == "" {
+        return "", "", ErrInvalidSlug
+    }
+    if r.owner == "" {
+        return r.owner, r.repo, ErrIncorrectParameterOwner
+    }
+    if r.repo == "" {
+        return r.owner, r.repo, ErrIncorrectParameterRepo
+    }
+    return r.owner, r.repo, nil
+}
+```
+
+## Intentional discards
+
+When an error is intentionally ignored, use `_ =` to make it explicit. This only
+applies to non-critical cleanup:
+
+```go
+_ = os.Remove(oldPath)   // stale file from prior failed update
+_ = os.Remove(newPath)   // cleanup on rename failure
+```
+
+Never silently discard errors on paths that matter.
+
+## Non-fatal warnings
+
+For non-fatal errors in CLI tools, print to stderr with a consistent
+`"subsystem: message"` prefix and return without propagating:
+
+```go
+fmt.Fprintf(os.Stderr, "proxy: GO_PROXY_CONFIG decode error: %v\n", err)
+fmt.Fprintf(os.Stderr, "cacheprog: base64 decode error: %v\n", err)
+```
+
+## Comparison
+
+Always use `errors.Is(err, target)` for sentinel comparison, never `==`:
+
+```go
+if errors.Is(err, io.EOF) {
+    break
+}
+if errors.Is(statErr, fs.ErrNotExist) {
+    // file doesn't exist yet, that's fine
+}
+```
+
+
+---
+
+# Go Testing
+
+## Test library
+
+Use `github.com/wow-look-at-my/testify` (assert + require). Never bare
+`t.Error` / `t.Fatal`.
+
+`require` for preconditions that must hold before further assertions can run.
+`assert` for independent checks that should all be evaluated.
+
+```go
+rel, found, err := up.DetectLatest(ctx, slug)
+require.Nil(t, err)
+require.True(t, found)
+assert.Equal(t, "2.0.0", rel.Version.Version)
+```
+
+Prefer `require.Nil(t, err)` / `assert.Nil(t, err)` over `require.NoError` /
+`assert.NoError`. This is the dominant pattern across the org.
+
+## Test package
+
+Tests live in the same package (white-box testing), not a `_test` package. This gives
+full access to unexported identifiers.
+
+```go
+// detect_test.go
+package selfupdate
+
+func TestParseVersion(t *testing.T) { ... }
+```
+
+## Table-driven tests
+
+Use for pure functions with many input/output variations. The struct literal defines
+inputs and expected outputs; `t.Run` uses a descriptive name for each case.
+
+```go
+func TestParseVersion(t *testing.T) {
+    tests := []struct {
+        tag     string
+        wantOK  bool
+        version string
+        major   int
+    }{
+        {"v1.2.3", true, "1.2.3", 1},
+        {"not-a-version", false, "", 0},
+    }
+    for _, tt := range tests {
+        t.Run(tt.tag, func(t *testing.T) {
+            v, ok := parseVersion(tt.tag)
+            require.Equal(t, tt.wantOK, ok)
+            if !ok {
+                return
+            }
+            assert.Equal(t, tt.version, v.Version)
+        })
+    }
+}
+```
+
+## Separate functions for distinct scenarios
+
+When tests need different setup or exercise fundamentally different behavior, use
+separate top-level test functions instead of subtests:
+
+```go
+func TestDetectSkipsDrafts(t *testing.T) { ... }
+func TestDetectIncludesDraftsWhenEnabled(t *testing.T) { ... }
+func TestDetectSkipsPrereleases(t *testing.T) { ... }
+```
+
+## Test naming
+
+`Test<Subject><Scenario>` or `Test<Subject>_<Scenario>`:
+
+```go
+TestParseProxyConfig_Valid
+TestParseProxyConfig_UsernameField
+TestWriteNetrc_CreatesFile
+TestDetectLatestNoReleases
+TestDetectLatestSourceError
+```
+
+## Test helpers
+
+All helpers call `t.Helper()` so failures report the caller's line:
+
+```go
+func fakeNpmServer(t *testing.T, name, version string) *httptest.Server {
+    t.Helper()
+    srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // ...
+    }))
+    t.Cleanup(srv.Close)
+    return srv
+}
+```
+
+Constructor-style helpers for test data use the `newTest` prefix:
+
+```go
+func newTestRelease(tag string, assets ...SourceAsset) *mockRelease { ... }
+func newTestAsset(name string) *mockAsset { ... }
+```
+
+## Test isolation
+
+Use stdlib facilities for isolation -- no manual cleanup code:
+
+```go
+t.Setenv("HOME", t.TempDir())
+t.Setenv("GO_PROXY_CONFIG", encoded)
+```
+
+For cleanup that can't use `t.Setenv` / `t.TempDir`, use `t.Cleanup`:
+
+```go
+prev := EmbeddedVersion
+EmbeddedVersion = "1.2.3"
+t.Cleanup(func() { EmbeddedVersion = prev })
+```
+
+## Resetting memoized state
+
+For singletons that use `sync.Once`, provide an unexported reset helper for tests:
+
+```go
+func resetDetectedVersion() {
+    detectVersionOnce = sync.Once{}
+    detectedVersion = ""
+}
+```
+
+## HTTP mocking
+
+Use `net/http/httptest` -- no external mock libraries:
+
+```go
+srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    switch r.URL.Path {
+    case "/repos/owner/repo/releases":
+        json.NewEncoder(w).Encode(releases)
+    default:
+        http.NotFound(w, r)
+    }
+}))
+t.Cleanup(srv.Close)
+```
+
+## Interface mocks
+
+Define mock types in the test file that uses them. Use the `mock` prefix:
+
+```go
+type mockSource struct {
+    releases []SourceRelease
+    err      error
+    assets   map[int64]string
+}
+
+func (s *mockSource) ListReleases(_ context.Context, _ Repository) ([]SourceRelease, error) {
+    return s.releases, s.err
+}
+```
+
+## Skip guards
+
+Skip slow or environment-dependent tests under `-short`:
+
+```go
+if testing.Short() {
+    t.Skip("builds a real binary; skipped under -short")
+}
+```
+
+## Cobra command testing
+
+Cobra binds flags to package-level vars. Tests that exercise commands must restore
+flag state in `t.Cleanup`:
+
+```go
+func resetFlags(t *testing.T) {
+    t.Helper()
+    old := installVersion
+    t.Cleanup(func() { installVersion = old })
+}
+```
+
+Capture command output via `execute(args...)` helpers that run the cobra command
+and return stdout + stderr as strings.
+
+
+---
+
+# Go CLI Design
+
+## Framework
+
+Use [cobra](https://github.com/spf13/cobra) for all CLI tools. Consistency across the
+org matters more than saving a dependency.
+
+## Entry point
+
+`main.go` is a one-liner that calls `cmd.Execute()`:
+
+```go
+package main
+
+import "github.com/wow-look-at-my/myapp/cmd"
+
+func main() {
+    cmd.Execute()
+}
+```
+
+## Root command
+
+Define in `cmd/root.go`. Export only `Execute()`.
+
+```go
+package cmd
+
+import (
+    "os"
+
+    "github.com/spf13/cobra"
+)
+
+var rootCmd = &cobra.Command{
+    Use:   "myapp",
+    Short: "One-line description",
+    Long:  `Longer description with context about what the tool does.`,
+}
+
+func Execute() {
+    if err := rootCmd.Execute(); err != nil {
+        os.Exit(1)
+    }
+}
+```
+
+## One command per file
+
+Each subcommand lives in its own file and registers itself via `init()`. The root
+command never manually registers subcommands -- each file is responsible for its own
+registration.
+
+```go
+// cmd/install.go
+package cmd
+
+import "github.com/spf13/cobra"
+
+var installCmd = &cobra.Command{
+    Use:   "install <name>",
+    Short: "Download and install a binary",
+    Args:  cobra.ExactArgs(1),
+    RunE:  runInstall,
+}
+
+func init() {
+    installCmd.Flags().StringVar(&installName, "name", "", "binary name")
+    installCmd.Flags().StringVar(&installPath, "path", "", "install path")
+    rootCmd.AddCommand(installCmd)
+}
+
+func runInstall(cmd *cobra.Command, args []string) error {
+    // ...
+}
+```
+
+## Nested subcommands
+
+For command groups (e.g. `myapp repo add`, `myapp repo list`), create a parent
+command file and child files:
+
+```go
+// cmd/repo_cmd.go -- parent group
+var repoCmd = &cobra.Command{
+    Use:   "repo",
+    Short: "Manage manifest repositories",
+}
+
+func init() {
+    rootCmd.AddCommand(repoCmd)
+}
+
+// cmd/repo_add.go -- child command
+var repoAddCmd = &cobra.Command{
+    Use:  "add <url>",
+    RunE: runRepoAdd,
+}
+
+func init() {
+    repoCmd.AddCommand(repoAddCmd)
+}
+```
+
+## Flags
+
+Long flags use double-hyphen (`--verbose`, `--output`). Short aliases use
+single-hyphen (`-v`, `-o`). Cobra and pflag enforce this automatically. Never use
+the `flag` stdlib package -- it only supports single-hyphen for all flags.
+
+Bind flags to package-level variables in `init()`, not struct fields:
+
+```go
+var (
+    releaseTag    string
+    releaseBuild  bool
+    releaseCosign bool
+)
+
+func init() {
+    cmd.Flags().StringVar(&releaseTag, "tag", "", "tag name for the release")
+    cmd.Flags().BoolVar(&releaseBuild, "build", false, "run matrix build first")
+    cmd.Flags().BoolVar(&releaseCosign, "cosign", false, "sign release artifacts")
+    rootCmd.AddCommand(cmd)
+}
+```
+
+## RunE, not Run
+
+Always use `RunE` (returns `error`) instead of `Run`. Let cobra handle error printing.
+Set `SilenceUsage: true` to prevent the usage message from printing on every error.
+
+```go
+var myCmd = &cobra.Command{
+    Use:          "my-command",
+    Short:        "Does a thing",
+    SilenceUsage: true,
+    RunE:         runMyCommand,
+}
+```
+
+## Output
+
+Use `cmd.OutOrStdout()` and `cmd.ErrOrStderr()` instead of `os.Stdout` / `os.Stderr`.
+This makes commands testable with captured output.
+
+```go
+func runInstall(cmd *cobra.Command, args []string) error {
+    fmt.Fprintf(cmd.OutOrStdout(), "Installing %s %s...\n", name, version)
+    // ...
+    fmt.Fprintf(cmd.OutOrStdout(), "Installed %s -> %s\n", name, dest)
+    return nil
+}
+```
+
+## Context
+
+Use `cmd.Context()` inside `RunE` handlers to propagate context. Never call
+`context.Background()` when you already have a command context.
+
+```go
+func runInstall(cmd *cobra.Command, args []string) error {
+    ctx := cmd.Context()
+    rel, found, err := up.DetectLatest(ctx, slug)
+    // ...
+}
+```
+
+## Version and self-update
+
+For tools distributed as binaries, use `go-selfupdate-mini` to wire up `version`
+and `update` commands:
+
+```go
+func init() {
+    selfupdate.RegisterCommands(rootCmd, selfupdate.ParseSlug("wow-look-at-my/myapp"))
+}
+```
+
+The library auto-detects the running binary's version from build info. No need to
+set `EmbeddedVersion` manually -- the autorelease tag scheme (`v0.0.<unix-seconds>`)
+is detected from VCS metadata.
+
+## Testing commands
+
+Test helpers that execute commands and capture output:
+
+```go
+func execute(args ...string) (string, string, error) {
+    stdout := &bytes.Buffer{}
+    stderr := &bytes.Buffer{}
+    rootCmd.SetOut(stdout)
+    rootCmd.SetErr(stderr)
+    rootCmd.SetArgs(args)
+    err := rootCmd.Execute()
+    return stdout.String(), stderr.String(), err
+}
+```
+
+Since cobra binds flags to package-level vars, tests must restore them:
+
+```go
+func resetFlags(t *testing.T) {
+    t.Helper()
+    old := installVersion
+    t.Cleanup(func() { installVersion = old })
+}
+```
+
+Use `withTempState(t)` patterns to isolate tests from real on-disk state.
+
+
+---
+
+# Go Interfaces and Constructors
+
+## Interface design
+
+Interfaces are small (1-3 methods) and focused on a single behavior:
+
+```go
+type Source interface {
+    ListReleases(ctx context.Context, repository Repository) ([]SourceRelease, error)
+    DownloadReleaseAsset(ctx context.Context, rel *Release, assetID int64) (io.ReadCloser, error)
+}
+
+type Decompressor interface {
+    Decompress(src io.Reader, cmd string) (io.Reader, error)
+}
+
+type Logger interface {
+    Print(v ...interface{})
+    Printf(format string, v ...interface{})
+}
+```
+
+Avoid broad interfaces with many methods. If an interface has more than 3-4 methods,
+it probably needs to be split.
+
+## Where to define interfaces
+
+Define interfaces where they are consumed, not alongside the implementation:
+
+- `Source` interface in `source.go` (consumer side)
+- `GitHubSource` implementation in `github_source.go`
+- `NpmSource` implementation in `npm_source.go`
+
+For test-only interfaces, define them in the test file:
+
+```go
+// cmd/release.go
+type releaseExecutor interface {
+    gitOutput(args ...string) (string, error)
+    gitRun(args ...string) error
+}
+```
+
+## Compile-time interface checks
+
+Place `var _ Interface = &Implementation{}` at the end of the implementation file:
+
+```go
+var _ Source = &GitHubSource{}
+var _ SourceRelease = &githubRelease{}
+var _ SourceAsset = &githubAsset{}
+var _ Repository = RepositorySlug{}
+```
+
+## Func adapter types
+
+For single-method interfaces, provide a `Func` adapter so callers can pass plain
+functions:
+
+```go
+type DecompressorFunc func(src io.Reader, cmd string) (io.Reader, error)
+
+func (f DecompressorFunc) Decompress(src io.Reader, cmd string) (io.Reader, error) {
+    return f(src, cmd)
+}
+```
+
+## Dependency injection
+
+Inject dependencies through the `Config` struct passed to the constructor:
+
+```go
+type Config struct {
+    Source          Source
+    Platform        Platform
+    Validate        func(*Release, []byte) error
+    CompareVersions func(current, candidate Version) bool
+    Install         func(io.Reader, string) error
+    Decompressors   map[string]Decompressor
+}
+```
+
+For simpler cases where full DI would be overkill, use package-level function
+variables:
+
+```go
+var inDockerCheck = defaultInDockerCheck
+var environFunc = os.Environ
+```
+
+With a setter that returns a restore function for tests:
+
+```go
+func SetInDockerCheck(f func() bool) func() {
+    old := inDockerCheck
+    inDockerCheck = f
+    return func() { inDockerCheck = old }
+}
+```
+
+## Constructors
+
+### Config struct pattern
+
+Use a `Config` struct for constructors with multiple parameters. Zero values are valid
+defaults. Never use long argument lists.
+
+```go
+type Config struct {
+    // Source where to load releases from. Defaults to GitHubSource.
+    Source Source
+
+    // Platform targeting. Defaults to runtime.GOOS/GOARCH.
+    Platform Platform
+
+    // CompareVersions returns true if candidate is newer than current.
+    // If nil, semantic versioning comparison is used.
+    CompareVersions func(current, candidate Version) bool
+}
+
+func NewUpdater(config Config) (*Updater, error) {
+    if config.Source == nil {
+        config.Source = defaultSource()
+    }
+    // ...
+}
+```
+
+### Simple value constructors
+
+For value types that can't fail, return the value directly (no pointer, no error):
+
+```go
+func NewRepositorySlug(owner, repo string) RepositorySlug { ... }
+func ParseSlug(slug string) RepositorySlug { ... }
+```
+
+### Functional options
+
+For optional configuration on top of required arguments, use functional options:
+
+```go
+type CommandOption func(*commandConfig)
+
+func WithConfig(cfg Config) CommandOption {
+    return func(c *commandConfig) { c.config = &cfg }
+}
+
+func WithVersion(v string) CommandOption {
+    return func(c *commandConfig) { c.currentVersion = v }
+}
+
+func RegisterCommands(rootCmd *cobra.Command, repo Repository, opts ...CommandOption) {
+    cfg := applyOptions(opts)
+    // ...
+}
+```
+
+### Singletons
+
+Lazy-initialize singletons with a package-level variable:
+
+```go
+var defaultUpdater *Updater
+
+func DefaultUpdater() *Updater {
+    if defaultUpdater != nil {
+        return defaultUpdater
+    }
+    defaultUpdater, _ = NewUpdater(Config{})
+    return defaultUpdater
+}
+```
+
+For thread-safe lazy init, use `sync.Once`:
+
+```go
+var (
+    detectOnce sync.Once
+    detected   string
+)
+
+func CurrentVersion() string {
+    detectOnce.Do(detect)
+    return detected
+}
+```
+
+
+---
+
+# TypeScript Style
+
+## Project layout
+
+```
+src/
+    <category>/
+        module.ts
+        shaders/        # WGSL shaders if applicable
+            shader.wgsl
+package.json
+tsconfig.json
+build.ts                # esbuild orchestration
+```
+
+Source lives under `src/`, organized by domain. Built output goes to `dist/` and is
+never committed.
+
+## Build tooling
+
+- **esbuild** for compilation and bundling
+- **tsc** (`tsc --noEmit`) for type-checking only -- do not use tsc for compilation
+- Each `.ts` file is a separate entry point when building a module library (no
+  cross-module bundling)
+
+```json
+{
+    "scripts": {
+        "build": "ts-node build.ts",
+        "typecheck": "tsc --noEmit"
+    }
+}
+```
+
+## Module conventions
+
+- Modules are self-contained -- a consumer should only need one import
+- All math functions return new values, no mutation
+- WebGPU modules assume `rgba32float` textures unless documented otherwise
+- Mat4 is column-major `Float32Array(16)`, perspective uses WebGPU clip-Z `[0,1]`
+
+## WGSL shaders
+
+Shaders live in `.wgsl` files under a `shaders/` directory next to the `.ts` that
+imports them. esbuild inlines them via `--loader:.wgsl=text`.
+
+**Never embed shaders as strings in TypeScript files.** See
+[File Organization](file-organization.md).
+
+## Type declarations
+
+For non-standard imports (WGSL, GLSL, etc.), provide ambient type declarations:
+
+```typescript
+// wgsl.d.ts
+declare module "*.wgsl" {
+    const content: string;
+    export default content;
+}
+```
+
+## Monorepo TypeScript
+
+For npm package monorepos, use a `ts` repo with workspace configuration. Shared
+`tsconfig.json` at the root, per-package overrides as needed.
+
+
+---
+
+# File Organization
+
+## One language per file
+
+Always put content in the correct file type. Do not embed one language inside another
+when it can be a separate file.
+
+- JavaScript -> `.js` files
+- TypeScript -> `.ts` files
+- CSS -> `.css` files
+- GLSL shaders -> `.glsl` files
+- WGSL shaders -> `.wgsl` files
+- HTML -> `.html` files
+
+Do not embed shaders as strings in JavaScript or TypeScript files. Load them from
+`.glsl` / `.wgsl` files instead, using the appropriate loader (e.g.
+`--loader:.wgsl=text` in esbuild).
+
+## One concern per file
+
+Split files by logical concern. A file should do one thing.
+
+In Go:
+
+| Concern | File |
+|---------|------|
+| Sentinel errors | `errors.go` |
+| Configuration types | `config.go` |
+| Interface definitions | `source.go`, `types.go` |
+| Each interface implementation | `github_source.go`, `npm_source.go` |
+| Logging infrastructure | `log.go` |
+| Version detection | `version.go` |
+| Each CLI subcommand | `install.go`, `upgrade.go`, `search.go` |
+
+## File size limits
+
+Go files: 500-line soft limit, 750-line hard limit. If a file exceeds this, split it
+by concern -- not arbitrarily.
+
+## Built output is never committed
+
+`dist/`, `build/`, compiled `.js` from `.ts` sources -- none of this goes in git.
+Use `.gitignore`:
+
+```gitignore
+dist/
+build/
+*.js
+!build.ts
+```
+
+## Binary artifacts
+
+Go binaries go in `build/` or `~/.local/bin/`. The `.gitignore` for Go repos:
+
+```gitignore
+/build/
+```
+
+## No non-ASCII in source files
+
+Em-dashes, ellipses, smart quotes are UTF-8 multi-byte. Use plain ASCII equivalents:
+
+- `--` not `--` (em-dash)
+- `...` not `...` (ellipsis)
+- `"` not `"` or `"` (smart quotes)
+
+Check with: `LC_ALL=C grep -P '[^[:print:][:space:]]' file`
+
+
+---
+
+# CI/CD
+
+## Go projects
+
+All Go projects use `go-toolchain` for building, testing, and releasing. Never run
+bare `go build`, `go test`, or `go mod tidy` -- use `go-toolchain` instead.
+
+### Standard CI workflow
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/go-toolchain@v1
+```
+
+The `permissions` block with `id-token: write` is required. Without it, the
+go-toolchain action fails.
+
+### What go-toolchain does
+
+`go-toolchain` handles the complete build pipeline:
+
+1. Downloads the correct Go version automatically (do not modify `go.mod`'s Go
+   version to work around mismatches)
+2. Runs `go mod tidy`
+3. Runs `go vet`
+4. Runs tests with coverage profiling
+5. Enforces minimum 80% coverage
+6. Produces binaries only if coverage targets are met
+7. Handles cross-compilation, benchmarking, and autorelease
+
+### Installing go-toolchain locally
+
+Binaries for all platforms are at
+`https://github.com/wow-look-at-my/go-toolchain/releases/latest`:
+
+- Linux amd64: `go-toolchain_linux_amd64`
+- Linux arm64: `go-toolchain_linux_arm64`
+- macOS amd64: `go-toolchain_darwin_amd64`
+- macOS arm64: `go-toolchain_darwin_arm64`
+- Windows amd64: `go-toolchain_windows_amd64.exe`
+- Windows arm64: `go-toolchain_windows_arm64.exe`
+
+## Workflow triggers
+
+### CI/test workflows
+
+Use `on: push:` only. No `pull_request:` triggers, branch filters, or path filters.
+
+```yaml
+on:
+  push:
+```
+
+### Deploy/release workflows
+
+Workflows that deploy (GitHub Pages, cloud) or publish releases (GoReleaser, npm)
+**must** keep their branch filters and special triggers intact:
+
+```yaml
+# GitHub Pages deploy -- keep the branch filter
+on:
+  push:
+    branches: [master]
+```
+
+**Rule of thumb:** if a workflow's jobs include `deploy`, `publish`, `release`,
+`pages`, or push to a production environment, preserve its trigger configuration
+exactly as-is.
+
+## GitHub Actions rules
+
+### Allowed actions
+
+Only use actions from:
+
+- `actions/*` (GitHub-owned)
+- `wow-look-at-my/*`
+- `PazerOP/*`
+
+Third-party community actions are **not allowed**. The org allowlist blocks them.
+Use the runner's built-in `gh` CLI instead of reaching for community actions.
+
+### Reusable actions
+
+Before writing a new workflow step from scratch, check `wow-look-at-my/actions` for
+something reusable.
+
+## PR preview (GitHub Pages repos)
+
+All repositories that use GitHub Pages must include a PR preview workflow using
+`PazerOP/pr-preview-action`:
+
+```yaml
+# .github/workflows/preview.yml
+name: Deploy PR previews
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+jobs:
+  deploy-preview:
+    uses: PazerOP/pr-preview-action/.github/workflows/preview.yml@v1
+    with:
+      source-dir: ./build/
+    secrets: inherit
+```
+
+For repos with a build step, use `artifact-name` instead of `source-dir`.
+
+Set the repo's **Settings > Pages** source to **GitHub Actions** (not "Deploy from a
+branch").
+
+## Waiting for CI
+
+Use `gh wait-ci` after pushing when you need to check CI results. Never use
+`sleep` + `gh run list` polling loops.
+
+```bash
+gh wait-ci                        # current branch, latest commit
+gh wait-ci --sha <commit-sha>    # specific commit
+gh wait-ci --interval 10         # poll every 10 seconds
+```
+
+## CI must pass
+
+No PRs can be merged in the `wow-look-at-my` org without passing CI. Always ensure CI
+is configured and passing before marking a PR as ready.
+
+
+---
+
+# Git Workflow
+
+## Default branch
+
+The default branch is `master` across the org.
+
+## Commit frequency
+
+Commit and push frequently. Do not accumulate a large batch of changes before
+committing. Work can be lost if the environment resets before pushing.
+
+## Commit messages
+
+Concise, imperative mood. Focus on the "why" rather than the "what". One to two
+sentences.
+
+```
+Add manifest encryption support for multi-recipient keys
+
+Fix version detection falling back to 0.0.0 for pseudo-versions
+```
+
+## Squash merge
+
+Pull requests are squash-merged. This means:
+
+- You can keep adding commits to your PR branch instead of rebasing
+- The commit history is cleaned up automatically on merge
+- Do not force push or rebase to clean up history -- it's unnecessary and often blocked
+
+When working on a PR:
+
+1. Make changes and commit normally
+2. If corrections are needed, add new commits
+3. Use `git merge` (not rebase) if you need to update from the base branch
+4. The entire PR becomes a single commit on merge
+
+## Branch protection
+
+Many repos have branch protection rules that prevent force pushing. This is not a
+problem because of squash merge (see above).
+
+## Documentation updates
+
+When making changes, check whether `CLAUDE.md` and `README.md` need updating. If they
+do, update them in the same commit or PR. Outdated docs are worse than no docs.
+
+
+---
+
