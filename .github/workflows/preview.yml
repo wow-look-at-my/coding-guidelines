@@ -5,19 +5,6 @@ on:
     types: [opened, reopened, synchronize]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - run: bash build.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: build
-          path: ./build/
-
   deploy-preview:
-    needs: build
     uses: PazerOP/pr-preview-action/.github/workflows/preview.yml@master
-    with:
-      artifact-name: build
     secrets: inherit
