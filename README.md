@@ -20,3 +20,12 @@ Code style and conventions for the `wow-look-at-my` org.
 - [File Organization](file-organization.md) -- one language per file, file size limits
 - [CI/CD](ci-cd.md) -- GitHub Actions, go-toolchain, workflow triggers
 - [Git Workflow](git-workflow.md) -- branching, commits, squash merge
+
+## llms.txt
+
+This repo publishes an [llms.txt](https://llmstxt.org/) site to GitHub Pages so LLMs can consume the guidelines directly.
+
+- `llms.txt` -- index of all guideline documents
+- `llms-full.txt` -- all guidelines concatenated into a single file
+
+Run `bash build.sh` to generate the site locally into `build/`.
