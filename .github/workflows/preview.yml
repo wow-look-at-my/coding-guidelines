@@ -6,12 +6,16 @@ on:
   pull_request:
     types: [opened, reopened, synchronize]
 
+# actions: read is required by the called pr-preview-action reusable workflow
+# (it downloads the named artifact via the Actions REST API); without the
+# grant here the run dies at startup ("startup_failure", zero jobs).
 permissions:
   contents: write
   pages: write
   pull-requests: write
   statuses: write
   id-token: write
+  actions: read
 
 jobs:
   build:
