@@ -12,6 +12,7 @@ permissions:
   pull-requests: write
   statuses: write
   id-token: write
+  actions: read
 
 jobs:
   build:

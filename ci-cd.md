@@ -17,6 +17,8 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: read
+  checks: read
 
 jobs:
   test:
@@ -27,7 +29,10 @@ jobs:
 ```
 
 The `permissions` block with `id-token: write` is required. Without it, the
-go-toolchain action fails.
+go-toolchain action fails. `actions: read` and `checks: read` are also required:
+the no-all-builds guard inside go-toolchain@v1 and the buildhost publish actions
+scan the run's jobs and check runs, and fail closed without them on private
+repos.
 
 ### What go-toolchain does
 
